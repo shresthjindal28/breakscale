@@ -14,7 +14,9 @@ from app.simulation.state import (
     SimulationResult,
 )
 from app.simulation.validator import GraphValidator
-
+from app.simulation.algorithms.load_balancing import LoadBalancer
+from app.simulation.algorithms.caching import LRUCache
+from app.simulation.components.database import DatabaseComponent
 
 class SimulationEngine:
     def __init__(
@@ -33,6 +35,9 @@ class SimulationEngine:
 
         self.graph = GraphBuilder(architecture).build()
         self.components: dict[str, SimulatedComponent] = {}
+        self.load_balancers: dict[str, LoadBalancer] = {}
+        self.caches: dict[str, LRUCache] = {}
+        self.node_data = {node.id: node.data for node in architecture.nodes}
 
         for node in architecture.nodes:
             if node.type == "client":
@@ -52,16 +57,36 @@ class SimulationEngine:
                 latency_ms=float(data.get("latency_ms", 10)),
             )
 
-            self.components[node.id] = SimulatedComponent(
-                self.env,
-                node.id,
-                component_config,
-            )
+            if node.type == "database":
+                component = DatabaseComponent(
+                    self.env, node.id, component_config,
+                    pool_size=int(data.get("pool_size", 10)),
+                )
+            else:
+                component = SimulatedComponent(self.env, node.id, component_config)
+            self.components[node.id] = component
+
+            if node.type == "loadBalancer":
+                self.load_balancers[node.id] = LoadBalancer(
+                    algorithm=data.get("algorithm", "round_robin"),
+                    seed=self.config.seed,
+                )
+            if node.type == "cache":
+                self.caches[node.id] = LRUCache(
+                    capacity=int(data.get("cache_capacity", 1000))
+                )
 
     def _request_process(self, request: SimulationRequest):
         current_node = request.current_node
 
         while True:
+            request.hops += 1
+            if request.hops > 100:
+                request.status = RequestStatus.FAILED
+                request.error = "Maximum request hops exceeded"
+                self.result.failed += 1
+                return
+            request.current_node = current_node
             request.path.append(current_node)
 
             if current_node in self.components:
@@ -81,17 +106,39 @@ class SimulationEngine:
 
             successors = list(self.graph.successors(current_node))
 
+            if current_node in self.caches:
+                data = self.node_data[current_node]
+                if self.caches[current_node].access(
+                    request.cache_key,
+                    now=float(self.env.now),
+                    ttl_seconds=float(data.get("ttl_seconds", 60)),
+                ):
+                    self._complete_request(request)
+                    return
+
             if not successors:
-                request.status = RequestStatus.COMPLETED
-                request.completed_at = float(self.env.now)
-                self.result.completed += 1
-                self.result.latencies_ms.append(
-                    (request.completed_at - request.created_at)
-                    * 1000
-                )
+                self._complete_request(request)
                 return
 
-            current_node = self.random.choice(successors)
+            if current_node in self.load_balancers:
+                current_node = self.load_balancers[current_node].select(
+                    successors,
+                    active_counts={
+                        target: self.components[target].resource.count
+                        if target in self.components else 0
+                        for target in successors
+                    },
+                )
+            else:
+                current_node = self.random.choice(successors)
+
+    def _complete_request(self, request: SimulationRequest):
+        request.status = RequestStatus.COMPLETED
+        request.completed_at = float(self.env.now)
+        self.result.completed += 1
+        self.result.latencies_ms.append(
+            (request.completed_at - request.created_at) * 1000
+        )
 
     def _generate_traffic(self, client_id: str, rps: float):
         if rps <= 0:
@@ -157,5 +204,12 @@ class SimulationEngine:
                     if component.processed else 0
                 ),
             }
+
+        for node_id, cache in self.caches.items():
+            self.result.node_metrics[node_id].update({
+                "cache_hits": cache.hits,
+                "cache_misses": cache.misses,
+                "cache_hit_rate": cache.hit_rate,
+            })
 
         return self.result

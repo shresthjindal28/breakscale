@@ -10,15 +10,15 @@ class RequestStatus(str, Enum):
     FAILED = "failed"
 
 
-@dataclass
-class SimulationRequest:
-    id: int
-    created_at: float
-    current_node: str
-    status: RequestStatus = RequestStatus.PENDING
-    completed_at: float | None = None
-    error: str | None = None
-    path: list[str] = field(default_factory=list)
+# @dataclass
+# class SimulationRequest:
+#     id: int
+#     created_at: float
+#     current_node: str
+#     status: RequestStatus = RequestStatus.PENDING
+#     completed_at: float | None = None
+#     error: str | None = None
+#     path: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -48,3 +48,19 @@ class SimulationResult:
     node_metrics: dict[str, dict[str, Any]] = field(
         default_factory=dict
     )
+
+@dataclass
+class SimulationRequest:
+    id: int
+    created_at: float
+    current_node: str
+    status: RequestStatus = RequestStatus.PENDING
+    completed_at: float | None = None
+    error: str | None = None
+    path: list[str] = field(default_factory=list)
+
+    # Stable cache key shared by requests for the same resource
+    cache_key: str = "default"
+
+    # Prevent accidental infinite traversal
+    hops: int = 0
