@@ -161,10 +161,12 @@ The server sends objects with `type` and `data` fields:
 - `simulation.completed`: the finalized simulation result, then a normal close.
 - `simulation.error`: a validation/configuration error, then close code 1008.
 
-Snapshots include cumulative throughput, error rate, exact linearly interpolated
+Snapshots include interval throughput, cumulative error rate, exact linearly interpolated
 latency percentiles (P50/P95/P99), queue depths, live component counters, background
-job metrics, and retry amplification. Throughput is completed HTTP requests divided
-by elapsed simulated seconds, not instantaneous throughput. Percentiles retain
+job metrics, and retry amplification. Snapshot throughput is the change in completed
+HTTP requests divided by simulated seconds since the preceding capture. Repeated
+captures at the same timestamp return zero interval throughput. Persisted REST
+summaries still use whole-run average throughput. Percentiles retain
 all latency samples; streaming quantile estimators remain future work.
 
 Each connection owns one run. Virtual time advances as fast as computation allows;
@@ -202,6 +204,22 @@ The POST error response includes `detail.simulation_id` for subsequent retrieval
 Cancellation, process crashes, or storage failures can still leave a running record;
 reconciliation and durable workers remain future work. The existing PostgreSQL
 models support this implementation without an additional migration.
+
+### Playground charts and node metrics
+
+The playground displays throughput, P95 latency, error rate, and total message
+queue depth across streamed snapshots. Click a node to inspect its counters;
+click the canvas to clear selection. Nodes retain their connection handles and
+show idle, healthy, busy, or overloaded badges. Queue badges use message depth
+and in-flight work; generic component badges use `queued`, `active`, and failure
+counters. Thresholds are provisional and cumulative rejections/failures can keep
+a node marked overloaded after recovery. Worker-local activity is not yet sampled.
+
+Use **Load overload example** for a Client (100 RPS) → API (50 RPS) → Database
+(30 RPS) path with queue limits of five and a single database connection. Charts
+advance in virtual time without playback pacing; badges do not animate individual
+requests. Message queue depth excludes generic service/database waiting queues,
+which are shown separately in the inspector.
 
 Load-balancer health checks and weights, variable service latency,
 advanced failures, live metrics/WebSockets, and frontend integration remain

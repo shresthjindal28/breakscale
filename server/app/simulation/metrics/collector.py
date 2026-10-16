@@ -1,7 +1,7 @@
 from dataclasses import asdict, dataclass, field
 
 from app.simulation.metrics.latency import latency_summary
-from app.simulation.metrics.throughput import calculate_error_rate, calculate_throughput
+from app.simulation.metrics.throughput import calculate_error_rate
 
 
 @dataclass
@@ -25,10 +25,17 @@ class MetricsCollector:
     def __init__(self, engine):
         self.engine = engine
         self.snapshots: list[MetricsSnapshot] = []
+        self.previous_time = 0.0
+        self.previous_completed = 0
 
     def capture(self) -> MetricsSnapshot:
         now = float(self.engine.env.now)
         result = self.engine.result
+        elapsed = now - self.previous_time
+        completed_delta = result.completed - self.previous_completed
+        interval_throughput = completed_delta / elapsed if elapsed > 0 else 0.0
+        self.previous_time = now
+        self.previous_completed = result.completed
         initial = result.component_attempts - result.total_retries
         jobs = self.engine.collect_job_metrics()
         job_metrics = asdict(jobs)
@@ -36,7 +43,7 @@ class MetricsCollector:
         snapshot = MetricsSnapshot(
             timestamp=now, generated=result.generated, completed=result.completed,
             failed=result.failed,
-            throughput_rps=calculate_throughput(result.completed, now),
+            throughput_rps=interval_throughput,
             error_rate=calculate_error_rate(result.failed, result.generated),
             latency=latency_summary(result.latencies_ms),
             queue_depths={node_id: queue.depth for node_id, queue in self.engine.queues.items()},

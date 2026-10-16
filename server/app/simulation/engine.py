@@ -1,30 +1,33 @@
-import random
 import math
+import random
 
 import networkx as nx
 
 from app.schemas.component import ArchitectureGraph
-from app.simulation.graph import GraphBuilder
-from app.simulation.scheduler import SimulationScheduler
+from app.simulation.algorithms.caching import LRUCache
+from app.simulation.algorithms.load_balancing import LoadBalancer
+from app.simulation.algorithms.retries import backoff_with_jitter
 from app.simulation.components.base import SimulatedComponent
+from app.simulation.components.database import DatabaseComponent
+from app.simulation.components.queue import MessageQueue
+from app.simulation.components.worker import BackgroundWorker
+from app.simulation.failures.circuit_breaker import CircuitBreaker
+from app.simulation.failures.injector import FailureEvent, FailureInjector
+from app.simulation.failures.recovery import RecoveryPolicy
+from app.simulation.graph import GraphBuilder
+from app.simulation.metrics.trace import TraceCollector
+from app.simulation.scheduler import SimulationScheduler
 from app.simulation.state import (
     ComponentConfig,
+    MessageStatus,
+    QueueMessage,
     RequestStatus,
     SimulationConfig,
     SimulationRequest,
     SimulationResult,
 )
 from app.simulation.validator import GraphValidator
-from app.simulation.algorithms.load_balancing import LoadBalancer
-from app.simulation.algorithms.caching import LRUCache
-from app.simulation.components.database import DatabaseComponent
-from app.simulation.components.queue import MessageQueue
-from app.simulation.components.worker import BackgroundWorker
-from app.simulation.state import MessageStatus, QueueMessage
-from app.simulation.failures.injector import FailureEvent, FailureInjector
-from app.simulation.failures.circuit_breaker import CircuitBreaker
-from app.simulation.failures.recovery import RecoveryPolicy
-from app.simulation.algorithms.retries import backoff_with_jitter
+
 
 class SimulationEngine:
     def __init__(
@@ -43,6 +46,7 @@ class SimulationEngine:
         self.random = random.Random(self.config.seed)
 
         self.result = SimulationResult()
+        self.trace = TraceCollector(max_events=20_000)
         self.requests: list[SimulationRequest] = []
         self.messages: list[QueueMessage] = []
 
@@ -247,9 +251,11 @@ class SimulationEngine:
                 request.status = RequestStatus.FAILED
                 request.error = "Maximum request hops exceeded"
                 self.result.failed += 1
+                self.trace.record(self.env.now, request.id, current_node, "request.failed")
                 return
             request.current_node = current_node
             request.path.append(current_node)
+            self.trace.record(self.env.now, request.id, current_node, "request.enter")
 
             if current_node in self.queues:
                 message = QueueMessage(
@@ -260,9 +266,11 @@ class SimulationEngine:
                     request.status = RequestStatus.FAILED
                     request.error = f"Queue full: {current_node}"
                     self.result.failed += 1
+                    self.trace.record(self.env.now, request.id, current_node, "request.failed")
                     return
                 self.messages.append(message)
                 self.result.job_metrics.submitted += 1
+                self.trace.record(self.env.now, request.id, current_node, "request.exit")
                 self._complete_request(request)
                 return
 
@@ -279,8 +287,10 @@ class SimulationEngine:
                         f"Component failed: {current_node}"
                     )
                     self.result.failed += 1
+                    self.trace.record(self.env.now, request.id, current_node, "request.failed")
                     return
 
+            self.trace.record(self.env.now, request.id, current_node, "request.exit")
             successors = list(self.graph.successors(current_node))
 
             if current_node in self.caches:
@@ -310,6 +320,7 @@ class SimulationEngine:
                 current_node = self.random.choice(successors)
 
     def _complete_request(self, request: SimulationRequest):
+        self.trace.record(self.env.now, request.id, request.current_node, "request.completed")
         request.status = RequestStatus.COMPLETED
         request.completed_at = float(self.env.now)
         self.result.completed += 1

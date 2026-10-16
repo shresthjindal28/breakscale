@@ -3,21 +3,16 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import get_settings
+from app.core.dependencies import get_owner_id
 from app.db.session import get_db
 from app.schemas.workspace import (
     WorkspaceCreate,
-    WorkspaceUpdate,
     WorkspaceResponse,
+    WorkspaceUpdate,
 )
 from app.services.workspace_service import WorkspaceService
 
-
 router = APIRouter(prefix="/workspaces", tags=["Workspaces"])
-
-
-def get_dev_user_id() -> UUID:
-    return get_settings().DEV_USER_ID
 
 
 @router.post(
@@ -28,7 +23,7 @@ def get_dev_user_id() -> UUID:
 async def create_workspace(
     data: WorkspaceCreate,
     db: AsyncSession = Depends(get_db),
-    owner_id: UUID = Depends(get_dev_user_id),
+    owner_id: UUID = Depends(get_owner_id),
 ):
     return await WorkspaceService(db).create(owner_id, data)
 
@@ -36,7 +31,7 @@ async def create_workspace(
 @router.get("", response_model=list[WorkspaceResponse])
 async def list_workspaces(
     db: AsyncSession = Depends(get_db),
-    owner_id: UUID = Depends(get_dev_user_id),
+    owner_id: UUID = Depends(get_owner_id),
 ):
     return await WorkspaceService(db).list(owner_id)
 
@@ -45,7 +40,7 @@ async def list_workspaces(
 async def get_workspace(
     workspace_id: UUID,
     db: AsyncSession = Depends(get_db),
-    owner_id: UUID = Depends(get_dev_user_id),
+    owner_id: UUID = Depends(get_owner_id),
 ):
     return await WorkspaceService(db).get(workspace_id, owner_id)
 
@@ -55,7 +50,7 @@ async def update_workspace(
     workspace_id: UUID,
     data: WorkspaceUpdate,
     db: AsyncSession = Depends(get_db),
-    owner_id: UUID = Depends(get_dev_user_id),
+    owner_id: UUID = Depends(get_owner_id),
 ):
     return await WorkspaceService(db).update(
         workspace_id, owner_id, data
@@ -66,7 +61,7 @@ async def update_workspace(
 async def delete_workspace(
     workspace_id: UUID,
     db: AsyncSession = Depends(get_db),
-    owner_id: UUID = Depends(get_dev_user_id),
+    owner_id: UUID = Depends(get_owner_id),
 ):
     await WorkspaceService(db).delete(workspace_id, owner_id)
     return Response(status_code=204)

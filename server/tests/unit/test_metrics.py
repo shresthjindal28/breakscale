@@ -5,8 +5,8 @@ import pytest
 from app.schemas.component import ArchitectureGraph
 from app.simulation.engine import SimulationEngine
 from app.simulation.metrics.collector import MetricsCollector
-from app.simulation.metrics.latency import percentile, latency_summary
-from app.simulation.metrics.throughput import calculate_throughput, calculate_error_rate
+from app.simulation.metrics.latency import latency_summary, percentile
+from app.simulation.metrics.throughput import calculate_error_rate, calculate_throughput
 from app.simulation.state import SimulationConfig
 
 
@@ -84,3 +84,17 @@ def test_invalid_graph_does_not_start_processes():
     with pytest.raises(ValueError):
         engine.start()
     assert not getattr(engine, "_started", False)
+
+
+def test_throughput_uses_interval_including_unequal_samples():
+    engine = SimulationEngine(graph(), SimulationConfig(duration_seconds=3, max_requests=10))
+    collector = MetricsCollector(engine)
+    engine.start()
+    engine.advance(1)
+    first = collector.capture()
+    assert first.throughput_rps == 10
+    engine.advance(3)
+    second = collector.capture()
+    assert second.throughput_rps == 0
+    assert second.completed == 10
+    assert collector.capture().throughput_rps == 0

@@ -1,5 +1,4 @@
 
-import pytest
 
 from app.schemas.component import ArchitectureGraph
 from app.simulation.validator import GraphValidator

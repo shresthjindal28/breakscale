@@ -1,7 +1,7 @@
 from app.schemas.component import ArchitectureGraph
+from app.simulation.components.database import DatabaseComponent
 from app.simulation.engine import SimulationEngine
 from app.simulation.state import SimulationConfig
-from app.simulation.components.database import DatabaseComponent
 
 
 def make_architecture():

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { COMPONENT_TYPES } from "@/lib/simulation/graph-adapter";
 
 export const nodeFormSchema = z.object({
   label: z
@@ -15,7 +16,9 @@ export const workspaceSchema = z.object({
     z.object({
       id: z.string(),
       position: z.object({ x: z.number(), y: z.number() }),
-      data: nodeFormSchema,
+      data: nodeFormSchema
+        .extend({ componentType: z.enum(COMPONENT_TYPES).optional() })
+        .passthrough(),
     }),
   ),
   edges: z.array(

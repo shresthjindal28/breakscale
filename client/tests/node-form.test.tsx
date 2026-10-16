@@ -12,7 +12,9 @@ test("rejects blank labels and submits trimmed labels", async () => {
     target: { value: "  Research  " },
   });
   fireEvent.click(screen.getByRole("button", { name: "Add node" }));
-  await waitFor(() => expect(onAdd).toHaveBeenCalledWith("Research"));
+  await waitFor(() =>
+    expect(onAdd).toHaveBeenCalledWith("Research", "service"),
+  );
   await waitFor(() =>
     expect(screen.getByLabelText("Node label")).toHaveValue(""),
   );

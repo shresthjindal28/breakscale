@@ -1,10 +1,11 @@
 from functools import lru_cache
 from pathlib import Path
+from uuid import UUID
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import ArgumentError
-from uuid import UUID
 
 DEV_USER_ID: UUID = UUID("11111111-1111-4111-8111-111111111111")
 
@@ -21,6 +22,18 @@ class Settings(BaseSettings):
     DATABASE_URL: str | None = None
     REDIS_URL: str | None = None
     DEV_USER_ID: UUID = DEV_USER_ID
+    JWT_SECRET_KEY: str = Field(min_length=32)
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=15, gt=0, le=60)
+    REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=7, gt=0, le=30)
+    COOKIE_SECURE: bool = True
+    ALLOWED_ORIGINS: list[str] = Field(default_factory=list)
+    MAX_ACTIVE_SIMULATIONS: int = Field(default=2, ge=1, le=10)
+    MAX_REQUESTS: int = Field(default=10_000, ge=1, le=100_000)
+    MAX_WS_MESSAGE_BYTES: int = Field(default=262_144, ge=1024)
+
+    @property
+    def trusted_origins(self) -> list[str]:
+        return self.ALLOWED_ORIGINS or [self.FRONTEND_URL.rstrip("/")]
 
     @property
     def database_url(self) -> URL:

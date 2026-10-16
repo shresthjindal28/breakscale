@@ -30,33 +30,48 @@ def setup_service():
     return service, workspace
 
 
+@pytest.fixture(autouse=True)
+def fake_queue(monkeypatch):
+    from unittest.mock import Mock
+    redis = AsyncMock()
+    redis.eval.return_value = 1
+    monkeypatch.setattr("app.services.simulation_service.Redis.from_url", Mock(return_value=redis))
+    monkeypatch.setattr("app.services.simulation_service.enqueue_simulation", Mock())
+
+
 @pytest.mark.asyncio
-async def test_success_persists_snapshot_and_summary():
+async def test_success_persists_snapshot_and_pending_status():
     service, workspace = setup_service()
     simulation = await service.create(uuid4(), SimulationCreate(workspace_id=workspace.id, duration_seconds=1))
-    assert simulation.status == "completed"
+    assert simulation.status == "pending"
     assert simulation.graph_snapshot == workspace.graph_data
     assert simulation.graph_snapshot is not workspace.graph_data
-    result = service.repo.save_result.call_args.args[0]
-    assert result.summary["completed"] > 0
-    assert result.summary["latency"]["p95_ms"] > 0
-    assert "latencies_ms" not in result.summary
-    assert "api" in result.node_metrics
-    assert service.db.commit.await_count == 2
+    service.repo.save_result.assert_not_called()
+    service.db.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_failed_run_persists_status_and_error():
+async def test_enqueue_failure_persists_status_and_error(monkeypatch):
+    from unittest.mock import Mock
+    monkeypatch.setattr("app.services.simulation_service.enqueue_simulation", Mock(side_effect=RuntimeError("queue down")))
+    service, workspace = setup_service()
+    with pytest.raises(HTTPException) as error:
+        await service.create(uuid4(), SimulationCreate(workspace_id=workspace.id))
+    assert error.value.status_code == 503
+    simulation = service.repo.create.call_args.args[0]
+    assert simulation.status == "failed"
+    result = service.repo.save_result.call_args.args[0]
+    assert result.summary["error_type"] == "EnqueueError"
+
+
+@pytest.mark.asyncio
+async def test_invalid_graph_is_rejected_before_enqueue():
     service, workspace = setup_service()
     workspace.graph_data = {"nodes": [], "edges": []}
     with pytest.raises(HTTPException) as error:
         await service.create(uuid4(), SimulationCreate(workspace_id=workspace.id))
     assert error.value.status_code == 422
-    simulation = service.repo.create.call_args.args[0]
-    assert simulation.status == "failed"
-    result = service.repo.save_result.call_args.args[0]
-    assert "Invalid architecture" in result.summary["error"]
-    assert service.db.commit.await_count == 2
+    service.repo.create.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -89,11 +104,39 @@ async def test_result_and_list_require_workspace_ownership():
     service.repo.list_by_workspace.assert_not_called()
 
 
-def test_development_auth_disabled(monkeypatch):
-    from app.api.v1.simulations import get_dev_owner_id
-    from app.core.config import get_settings
+def test_unauthenticated_resources_rejected():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    with TestClient(app) as client:
+        assert client.get("/api/v1/workspaces").status_code == 401
+        assert client.get("/api/v1/users/me").status_code == 401
 
-    monkeypatch.setattr(get_settings(), "DEBUG", False)
+
+@pytest.mark.asyncio
+async def test_delete_checks_ownership_before_mutation():
+    service, workspace = setup_service()
+    simulation = SimpleNamespace(workspace_id=workspace.id, status="completed")
+    service.repo.get.return_value = simulation
+    await service.delete(uuid4(), uuid4())
+    service.db.delete.assert_awaited_once_with(simulation)
+    service.db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_delete_rejects_active_simulation():
+    service, workspace = setup_service()
+    service.repo.get.return_value = SimpleNamespace(workspace_id=workspace.id, status="running")
     with pytest.raises(HTTPException) as error:
-        get_dev_owner_id()
-    assert error.value.status_code == 403
+        await service.delete(uuid4(), uuid4())
+    assert error.value.status_code == 409
+    service.db.delete.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_foreign_run_is_denied():
+    service, workspace = setup_service()
+    service.repo.get.return_value = SimpleNamespace(workspace_id=workspace.id, status="completed")
+    service.workspaces.get.side_effect = HTTPException(404, "Workspace not found")
+    with pytest.raises(HTTPException):
+        await service.delete(uuid4(), uuid4())
+    service.db.delete.assert_not_called()

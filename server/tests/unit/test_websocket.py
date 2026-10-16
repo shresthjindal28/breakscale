@@ -1,8 +1,50 @@
+import json
+from dataclasses import asdict
+from types import SimpleNamespace
+from uuid import uuid4
+from unittest.mock import AsyncMock
+
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import app
 from app.api.v1.websocket import manager
+from app.main import app
+from app.infrastructure.redis import get_redis
+from app.db.session import get_db
+from app.simulation.engine import SimulationEngine
+from app.schemas.component import ArchitectureGraph
+from app.simulation.state import SimulationConfig
+from app.simulation.metrics.collector import MetricsCollector
+
+
+@pytest.fixture(autouse=True)
+def stream_dependencies(monkeypatch):
+    redis = AsyncMock()
+    redis.getdel.return_value = str(uuid4()).encode()
+    redis.eval.return_value = 1
+    db = AsyncMock()
+    db.get.return_value = SimpleNamespace()
+    async def redis_dependency():
+        yield redis
+    async def db_dependency():
+        yield db
+    app.dependency_overrides[get_redis] = redis_dependency
+    app.dependency_overrides[get_db] = db_dependency
+    def enqueue(function, run_id, user_id, graph, duration, interval, seed, maximum, **kwargs):
+        engine = SimulationEngine(ArchitectureGraph.model_validate(graph),SimulationConfig(duration_seconds=duration,seed=seed,max_requests=maximum))
+        collector = MetricsCollector(engine)
+        engine.start()
+        events = [{"type":"simulation.started","data":{"duration_seconds":duration,"sample_interval":interval}}]
+        sample = 1
+        while engine.env.now < duration:
+            engine.advance(min(sample*interval,duration))
+            events.append({"type":"simulation.metrics","data":asdict(collector.capture())})
+            sample += 1
+        events.append({"type":"simulation.completed","data":asdict(engine.finalize())})
+        redis.xread.return_value = [(b"stream",[(str(i).encode(),{b"event":json.dumps(event).encode()}) for i,event in enumerate(events)])]
+    monkeypatch.setattr("app.api.v1.websocket.get_queue",lambda:SimpleNamespace(enqueue=enqueue))
+    yield
+    app.dependency_overrides.clear()
 
 
 def payload():
@@ -22,7 +64,9 @@ def payload():
 
 def events_for(data):
     with TestClient(app) as client:
-        with client.websocket_connect("/api/v1/simulations/stream") as ws:
+        with client.websocket_connect("/api/v1/simulations/stream",headers={"Origin":"http://localhost:3000"}) as ws:
+            ws.send_json({"ticket":"single-use-test-ticket"})
+            assert ws.receive_json()["type"] == "auth.authenticated"
             ws.send_json(data)
             events = []
             while True:
@@ -82,3 +126,11 @@ def test_nondivisible_sample_interval_includes_final_snapshot():
     data.update(duration_seconds=2.5, sample_interval=1)
     events = events_for(data)
     assert [e["data"]["timestamp"] for e in events[1:-1]] == [1, 2, 2.5]
+
+
+def test_websocket_untrusted_origin_rejected():
+    from starlette.websockets import WebSocketDisconnect
+    with TestClient(app) as client:
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect("/api/v1/simulations/stream",headers={"Origin":"https://evil.example"}):
+                pass

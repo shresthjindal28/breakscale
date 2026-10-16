@@ -18,6 +18,7 @@ class SimulationResponse(BaseModel):
     status: str
     duration_seconds: float
     created_at: datetime | None = None
+    graph_snapshot: dict | None = None
 
 
 class SimulationResultResponse(BaseModel):

@@ -4,7 +4,7 @@ import pytest
 import simpy
 
 from app.schemas.component import ArchitectureGraph
-from app.simulation.algorithms.retries import exponential_backoff, backoff_with_jitter
+from app.simulation.algorithms.retries import backoff_with_jitter, exponential_backoff
 from app.simulation.components.base import SimulatedComponent
 from app.simulation.engine import SimulationEngine
 from app.simulation.state import ComponentConfig, SimulationConfig

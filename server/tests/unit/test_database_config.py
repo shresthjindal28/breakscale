@@ -5,7 +5,7 @@ from app.core.config import Settings
 
 def settings(url):
     return Settings(
-        _env_file=None, APP_NAME="test", APP_VERSION="1", DEBUG=False,
+        _env_file=None, JWT_SECRET_KEY="test-secret-key-with-at-least-32-characters", APP_NAME="test", APP_VERSION="1", DEBUG=False,
         API_V1_PREFIX="/api/v1", FRONTEND_URL="http://localhost:3000",
         DATABASE_URL=url,
     )
