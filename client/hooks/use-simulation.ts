@@ -10,7 +10,7 @@ export function useSimulation() {
   const state = useSimulationStore();
   const { start, setRunning, addSnapshot, complete, fail, reset } = state;
   const runSimulation = useCallback(
-    (nodes: Node[], edges: Edge[], duration = 10) => {
+    async (nodes: Node[], edges: Edge[], duration = 10) => {
       const runId = ++runIdRef.current;
       socketRef.current?.close();
       start(duration);
@@ -20,7 +20,7 @@ export function useSimulation() {
         const graph = toBackendGraph(nodes, edges);
         if (!graph.nodes.length)
           throw new Error("Add components before running");
-        socketRef.current = connectSimulation({
+        const socket = await connectSimulation({
           graph,
           durationSeconds: duration,
           onEvent: (event) => {
@@ -59,8 +59,13 @@ export function useSimulation() {
               fail("Connection closed before simulation finished");
           },
         });
+        if (runId !== runIdRef.current) socket.close();
+        else socketRef.current = socket;
       } catch (err) {
-        fail(err instanceof Error ? err.message : "Unable to start simulation");
+        if (runId === runIdRef.current)
+          fail(
+            err instanceof Error ? err.message : "Unable to start simulation",
+          );
       }
     },
     [start, setRunning, addSnapshot, complete, fail],

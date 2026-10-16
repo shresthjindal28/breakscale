@@ -6,6 +6,12 @@ import { useSimulation } from "@/hooks/use-simulation";
 import { useSimulationStore } from "@/stores/simulation-store";
 import { workspaceSchema } from "@/lib/schemas/workspace";
 
+vi.mock("@/lib/api/auth", () => ({
+  authenticatedFetch: vi.fn(
+    async () => new Response(JSON.stringify({ ticket: "one-use-ticket" })),
+  ),
+}));
+
 const nodes = [
   {
     id: "client",
@@ -71,13 +77,17 @@ test("event parser matches backend error envelope and rejects malformed messages
     parseSimulationEvent('{"type":"simulation.metrics","data":{}}'),
   ).toThrow();
 });
-test("hook sends graph, handles errors, and ignores stale runs", () => {
+test("hook sends graph, handles errors, and ignores stale runs", async () => {
   vi.stubGlobal("WebSocket", FakeSocket);
   const { result, unmount } = renderHook(() => useSimulation());
-  act(() => result.current.runSimulation(nodes, [], 10));
+  await act(async () => {
+    await result.current.runSimulation(nodes, [], 10);
+  });
   const first = FakeSocket.instances[0];
   act(() => first.onopen?.());
-  expect(JSON.parse(first.send.mock.calls[0][0]).graph.nodes[0].type).toBe(
+  expect(JSON.parse(first.send.mock.calls[0][0]).ticket).toBe("one-use-ticket");
+  act(() => first.emit({ type: "auth.authenticated", data: {} }));
+  expect(JSON.parse(first.send.mock.calls[1][0]).graph.nodes[0].type).toBe(
     "client",
   );
   act(() =>
@@ -87,12 +97,15 @@ test("hook sends graph, handles errors, and ignores stale runs", () => {
     }),
   );
   expect(result.current.status).toBe("running");
-  act(() => result.current.runSimulation(nodes, [], 5));
+  await act(async () => {
+    await result.current.runSimulation(nodes, [], 5);
+  });
   act(() =>
     first.emit({ type: "simulation.error", data: { message: "Old error" } }),
   );
   expect(result.current.status).toBe("connecting");
   const second = FakeSocket.instances[1];
+  act(() => second.emit({ type: "auth.authenticated", data: {} }));
   act(() =>
     second.emit({
       type: "simulation.error",
@@ -104,11 +117,14 @@ test("hook sends graph, handles errors, and ignores stale runs", () => {
   expect(result.current.status).toBe("idle");
   unmount();
 });
-test("hook retains final results and completes at 100 percent", () => {
+test("hook retains final results and completes at 100 percent", async () => {
   vi.stubGlobal("WebSocket", FakeSocket);
   const { result } = renderHook(() => useSimulation());
-  act(() => result.current.runSimulation(nodes, []));
+  await act(async () => {
+    await result.current.runSimulation(nodes, []);
+  });
   const socket = FakeSocket.instances[0];
+  act(() => socket.emit({ type: "auth.authenticated", data: {} }));
   const jobs = {
     submitted: 0,
     completed: 0,
@@ -136,10 +152,12 @@ test("hook retains final results and completes at 100 percent", () => {
   expect(result.current.progress).toBe(100);
   expect(result.current.result?.completed).toBe(1);
 });
-test("early socket closure reports an error", () => {
+test("early socket closure reports an error", async () => {
   vi.stubGlobal("WebSocket", FakeSocket);
   const { result } = renderHook(() => useSimulation());
-  act(() => result.current.runSimulation(nodes, []));
+  await act(async () => {
+    await result.current.runSimulation(nodes, []);
+  });
   act(() => FakeSocket.instances[0].onclose?.());
   expect(result.current.error).toContain("before simulation finished");
 });

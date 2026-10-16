@@ -2,7 +2,8 @@ import type { BackendGraph } from "@/lib/simulation/graph-adapter";
 export interface SavedSimulation {
   id: string;
   workspace_id: string;
-  status: "pending" | "running" | "completed" | "failed";
+  status:
+    "pending" | "running" | "completed" | "failed" | "cancelling" | "cancelled";
   duration_seconds: number;
   created_at: string | null;
   graph_snapshot: BackendGraph | null;

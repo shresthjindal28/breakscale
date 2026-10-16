@@ -1,5 +1,6 @@
 import math
 import random
+from typing import Any
 
 import networkx as nx
 
@@ -76,6 +77,7 @@ class SimulationEngine:
                 latency_ms=float(data.get("latency_ms", 10)),
             )
 
+            component: SimulatedComponent
             if node.type == "database":
                 component = DatabaseComponent(
                     self.env, node.id, component_config,
@@ -120,6 +122,7 @@ class SimulationEngine:
             if (start is None) != (duration is None):
                 raise ValueError("failure_start_at and failure_duration must be supplied together")
             if start is not None:
+                assert duration is not None
                 self.failure_injector.schedule(FailureEvent(node.id, float(start), float(duration)))
 
         for node in architecture.nodes:
@@ -395,7 +398,7 @@ class SimulationEngine:
         self.env.run(until=until)
 
     def collect_node_metrics(self) -> dict:
-        metrics = {}
+        metrics: dict[str, dict[str, Any]] = {}
         for node_id, component in self.components.items():
             metrics[node_id] = {
                 "processed": component.processed,

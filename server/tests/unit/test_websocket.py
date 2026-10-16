@@ -1,20 +1,20 @@
 import json
 from dataclasses import asdict
 from types import SimpleNamespace
-from uuid import uuid4
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.api.v1.websocket import manager
-from app.main import app
-from app.infrastructure.redis import get_redis
 from app.db.session import get_db
-from app.simulation.engine import SimulationEngine
+from app.infrastructure.redis import get_redis
+from app.main import app
 from app.schemas.component import ArchitectureGraph
-from app.simulation.state import SimulationConfig
+from app.simulation.engine import SimulationEngine
 from app.simulation.metrics.collector import MetricsCollector
+from app.simulation.state import SimulationConfig
 
 
 @pytest.fixture(autouse=True)

@@ -1,3 +1,4 @@
+import { authenticatedFetch } from "@/lib/api/auth";
 import type { SimulationTrace } from "@/types/simulation-trace";
 import type {
   SavedSimulation,
@@ -5,11 +6,8 @@ import type {
   SavedWorkspace,
 } from "@/types/simulation-history";
 import type { BackendGraph } from "@/lib/simulation/graph-adapter";
-const API_URL = (
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1"
-).replace(/\/$/, "");
 async function apiRequest<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_URL}${path}`, {
+  const response = await authenticatedFetch(path, {
     ...options,
     headers: { "Content-Type": "application/json", ...options?.headers },
     cache: "no-store",
@@ -30,6 +28,11 @@ async function apiRequest<T>(path: string, options?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 export const simulationHistoryApi = {
+  cancel: (id: string) =>
+    apiRequest<SavedSimulation>(
+      `/simulations/${encodeURIComponent(id)}/cancel`,
+      { method: "POST" },
+    ),
   getTrace: (id: string) =>
     apiRequest<SimulationTrace>(`/simulations/${encodeURIComponent(id)}/trace`),
   list: (workspaceId: string) =>

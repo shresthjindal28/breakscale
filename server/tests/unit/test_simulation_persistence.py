@@ -106,6 +106,7 @@ async def test_result_and_list_require_workspace_ownership():
 
 def test_unauthenticated_resources_rejected():
     from fastapi.testclient import TestClient
+
     from app.main import app
     with TestClient(app) as client:
         assert client.get("/api/v1/workspaces").status_code == 401

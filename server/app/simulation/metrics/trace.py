@@ -22,7 +22,7 @@ class TraceCollector:
         self.events: list[TraceEvent] = []
         self.dropped_events = 0
 
-    def record(self, timestamp: float, request_id: str, node_id: str, event_type: TraceEventType):
+    def record(self, timestamp: float, request_id: str | int, node_id: str, event_type: TraceEventType):
         if len(self.events) >= self.max_events:
             self.dropped_events += 1
             return

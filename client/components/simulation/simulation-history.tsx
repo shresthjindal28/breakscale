@@ -9,12 +9,14 @@ export function SimulationHistory({
   onDelete,
   onCompare,
   onReplay,
+  onCancel,
 }: {
   runs: SavedSimulation[];
   loading: boolean;
   onDelete: (id: string) => Promise<void>;
   onCompare: (a: string, b: string) => void;
   onReplay?: (id: string) => void;
+  onCancel?: (id: string) => Promise<void>;
 }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [deleting, setDeleting] = useState<string | null>(null);
@@ -84,6 +86,11 @@ export function SimulationHistory({
                 · {run.duration_seconds}s · {run.status}
               </p>
             </div>
+            {onCancel && ["pending", "running"].includes(run.status) && (
+              <Button variant="outline" onClick={() => void onCancel(run.id)}>
+                Cancel run
+              </Button>
+            )}
             {onReplay && run.status === "completed" && (
               <Button
                 variant="outline"
@@ -99,7 +106,8 @@ export function SimulationHistory({
               disabled={
                 !!deleting ||
                 run.status === "running" ||
-                run.status === "pending"
+                run.status === "pending" ||
+                run.status === "cancelling"
               }
               onClick={() => void remove(run.id)}
               aria-label={`Delete simulation ${run.id}`}

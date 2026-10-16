@@ -1,3 +1,4 @@
+import { AuthGate } from "@/components/auth/auth-gate";
 import type { Metadata } from "next";
 import { WorkspacePlayground } from "@/components/workspace-playground";
 
@@ -6,5 +7,9 @@ export const metadata: Metadata = {
 };
 
 export default function PlaygroundPage() {
-  return <WorkspacePlayground />;
+  return (
+    <AuthGate>
+      <WorkspacePlayground />
+    </AuthGate>
+  );
 }

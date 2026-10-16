@@ -40,7 +40,7 @@ async def stream_simulation(websocket: WebSocket, redis: Redis = Depends(get_red
     run_id = None
     user_id = None
     disconnect = None
-    reader = None
+    reader: asyncio.Future | None = None
     try:
         auth = await receive_payload(websocket)
         user_id = await consume_ws_ticket(redis,auth.get("ticket",""))
@@ -71,7 +71,7 @@ async def stream_simulation(websocket: WebSocket, redis: Redis = Depends(get_red
         cursor = "0-0"
         disconnect = asyncio.create_task(websocket.receive())
         while True:
-            reader = asyncio.create_task(redis.xread({stream:cursor},count=100,block=1000))
+            reader = asyncio.ensure_future(redis.xread({stream:cursor},count=100,block=1000))
             done,_ = await asyncio.wait([reader,disconnect],return_when=asyncio.FIRST_COMPLETED)
             if disconnect in done:
                 raise WebSocketDisconnect()

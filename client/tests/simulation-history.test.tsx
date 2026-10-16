@@ -1,3 +1,4 @@
+import { setAccessToken } from "@/lib/api/auth";
 import {
   fireEvent,
   render,
@@ -80,6 +81,7 @@ test("selection is limited to two completed runs and delete errors surface", asy
   expect(await screen.findByRole("alert")).toHaveTextContent("Delete failed");
 });
 test("delete API accepts 204 and structured errors preserve run ID", async () => {
+  setAccessToken("test-token");
   const fetcher = vi
     .fn()
     .mockResolvedValueOnce(new Response(null, { status: 204 }))

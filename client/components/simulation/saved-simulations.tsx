@@ -70,7 +70,9 @@ export function SavedSimulations() {
     try {
       await saveWorkspace();
       await history.saveRun(duration);
-      setNotice("Current canvas saved and simulation completed.");
+      setNotice(
+        "Current canvas saved and simulation queued. History updates automatically.",
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to save run");
     } finally {
@@ -221,6 +223,7 @@ export function SavedSimulations() {
           await history.deleteRun(id);
           if (replayId === id) setReplayId(null);
         }}
+        onCancel={history.cancelRun}
         onReplay={(id) => setReplayId(id)}
         onCompare={(a, b) => void compare(a, b)}
       />

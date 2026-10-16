@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     MAX_WS_MESSAGE_BYTES: int = Field(default=262_144, ge=1024)
 
     @property
+    def redis_url(self) -> str:
+        if not self.REDIS_URL:
+            raise ValueError("REDIS_URL is required")
+        return self.REDIS_URL
+
+    @property
     def trusted_origins(self) -> list[str]:
         return self.ALLOWED_ORIGINS or [self.FRONTEND_URL.rstrip("/")]
 

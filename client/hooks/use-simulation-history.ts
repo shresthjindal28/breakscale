@@ -51,6 +51,29 @@ export function useSimulationHistory(workspaceId: string | null) {
       invalidate();
     };
   }, [refresh, invalidate]);
+  const hasActive =
+    runsWorkspace === workspaceId &&
+    runs.some((run) =>
+      ["pending", "running", "cancelling"].includes(run.status),
+    );
+  useEffect(() => {
+    if (!hasActive) return;
+    const timer = setInterval(() => {
+      void refresh();
+    }, 1500);
+    return () => clearInterval(timer);
+  }, [hasActive, refresh]);
+  const cancelRun = useCallback(
+    async (id: string) => {
+      try {
+        await simulationHistoryApi.cancel(id);
+        await refresh();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Cancellation failed");
+      }
+    },
+    [refresh],
+  );
   const saveRun = useCallback(
     async (duration: number) => {
       if (!workspaceId) throw new Error("Save the workspace before running");
@@ -108,5 +131,6 @@ export function useSimulationHistory(workspaceId: string | null) {
     saveRun,
     loadResult,
     deleteRun,
+    cancelRun,
   };
 }

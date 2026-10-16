@@ -55,7 +55,7 @@ class SimulationService:
             validate_workload(workspace.graph_data)
         except (ValueError, TypeError) as exc:
             raise HTTPException(422, str(exc)) from None
-        redis = Redis.from_url(get_settings().REDIS_URL, socket_timeout=5, socket_connect_timeout=5)
+        redis = Redis.from_url(get_settings().redis_url, socket_timeout=5, socket_connect_timeout=5)
         run_id = uuid4()
         try:
             await acquire_slot(redis, owner_id, str(run_id))
@@ -111,7 +111,7 @@ class SimulationService:
         await self.db.refresh(simulation, with_for_update=True)
         if simulation.status not in {"pending", "running", "cancelling"}:
             raise HTTPException(409, "Simulation is already finished")
-        redis = Redis.from_url(get_settings().REDIS_URL, socket_timeout=5, socket_connect_timeout=5)
+        redis = Redis.from_url(get_settings().redis_url, socket_timeout=5, socket_connect_timeout=5)
         try:
             await redis.set(f"breakscale:cancel:{simulation_id}", "1", ex=86400)
             simulation.status = "cancelled" if simulation.status == "pending" else "cancelling"

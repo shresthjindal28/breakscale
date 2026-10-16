@@ -18,7 +18,7 @@ from app.infrastructure.task_queue import enqueue_simulation, get_queue
 async def reconcile():
     settings=get_settings()
     engine=create_async_engine(settings.database_url,poolclass=NullPool)
-    redis=Redis.from_url(settings.REDIS_URL)
+    redis=Redis.from_url(settings.redis_url)
     try:
         async with async_sessionmaker(engine,expire_on_commit=False)() as db:
             cutoff=datetime.now(timezone.utc)-timedelta(minutes=16)

@@ -27,7 +27,7 @@ async def execute_saved_simulation(simulation_id: str):
     settings = get_settings()
     db_engine = create_async_engine(settings.database_url,poolclass=NullPool)
     sessions = async_sessionmaker(db_engine,expire_on_commit=False)
-    redis = Redis.from_url(settings.REDIS_URL,socket_timeout=5,socket_connect_timeout=5)
+    redis = Redis.from_url(settings.redis_url,socket_timeout=5,socket_connect_timeout=5)
     owner_id = None
     engine = None
     try:
@@ -69,6 +69,8 @@ async def execute_saved_simulation(simulation_id: str):
             except SimulationCancelled:
                 await db.rollback()
                 run = await db.get(Simulation,UUID(simulation_id))
+                if run is None:
+                    return
                 run.status = "cancelled"
                 if engine is not None:
                     result = asdict(engine.result)
@@ -88,9 +90,11 @@ async def execute_saved_simulation(simulation_id: str):
                         db.add(SimulationResult(simulation_id=run.id,summary={"error":str(exc),"error_type":type(exc).__name__},node_metrics={},trace_data=engine.trace.export() if engine else None))
                     await db.commit()
                 logger.exception("Simulation failed",extra={"simulation_id":simulation_id})
-            event = json.dumps({"type":"simulation.finished","data":{"simulation_id":simulation_id,"status":run.status}})
-            await redis.set(f"breakscale:progress:{simulation_id}",event,ex=3600)
-            await redis.publish(f"breakscale:progress:{simulation_id}",event)
+            if run is None:
+                return
+            finished_event = json.dumps({"type":"simulation.finished","data":{"simulation_id":simulation_id,"status":run.status}})
+            await redis.set(f"breakscale:progress:{simulation_id}",finished_event,ex=3600)
+            await redis.publish(f"breakscale:progress:{simulation_id}",finished_event)
     finally:
         if owner_id is not None:
             try:

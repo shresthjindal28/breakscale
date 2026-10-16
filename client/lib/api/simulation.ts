@@ -1,3 +1,4 @@
+import { authenticatedFetch } from "@/lib/api/auth";
 import { z } from "zod";
 import type { BackendGraph } from "@/lib/simulation/graph-adapter";
 import type { SimulationEvent } from "@/types/simulation";
@@ -75,23 +76,46 @@ interface StartSimulationOptions {
   onError: (error: Error) => void;
   onClose?: () => void;
 }
-export function connectSimulation(options: StartSimulationOptions): WebSocket {
+export async function connectSimulation(
+  options: StartSimulationOptions,
+): Promise<WebSocket> {
+  const ticketResponse = await authenticatedFetch("/auth/ws-ticket", {
+    method: "POST",
+  });
+  if (!ticketResponse.ok)
+    throw new Error("Unable to authenticate simulation connection");
+  const { ticket } = await ticketResponse.json();
   const baseUrl =
     process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000/api/v1";
   const socket = new WebSocket(
     `${baseUrl.replace(/\/$/, "")}/simulations/stream`,
   );
-  socket.onopen = () =>
-    socket.send(
-      JSON.stringify({
-        graph: options.graph,
-        duration_seconds: options.durationSeconds,
-        sample_interval: options.sampleInterval ?? 0.5,
-        seed: options.seed ?? 42,
-      }),
-    );
+  socket.onopen = () => socket.send(JSON.stringify({ ticket }));
+  let authenticated = false;
   socket.onmessage = (message) => {
     let event: SimulationEvent;
+    try {
+      const handshake = JSON.parse(message.data as string);
+      if (handshake.type === "auth.authenticated") {
+        if (authenticated) return;
+        authenticated = true;
+        socket.send(
+          JSON.stringify({
+            graph: options.graph,
+            duration_seconds: options.durationSeconds,
+            sample_interval: options.sampleInterval ?? 0.5,
+            seed: options.seed ?? 42,
+          }),
+        );
+        return;
+      }
+      if (!authenticated) throw new Error("Unauthenticated simulation event");
+    } catch {
+      options.onError(new Error("Invalid simulation handshake"));
+      socket.close();
+      return;
+    }
+
     try {
       event = parseSimulationEvent(message.data as string);
     } catch {
