@@ -4,6 +4,9 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import ArgumentError
+from uuid import UUID
+
+DEV_USER_ID: UUID = UUID("11111111-1111-4111-8111-111111111111")
 
 
 class Settings(BaseSettings):
@@ -17,6 +20,7 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str | None = None
     REDIS_URL: str | None = None
+    DEV_USER_ID: UUID = DEV_USER_ID
 
     @property
     def database_url(self) -> URL:
@@ -56,3 +60,4 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
