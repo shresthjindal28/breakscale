@@ -77,6 +77,9 @@ class SimulationResult:
         default_factory=dict
     )
     job_metrics: BackgroundJobMetrics = field(default_factory=BackgroundJobMetrics)
+    total_retries: int = 0
+    component_attempts: int = 0
+    retry_amplification: float = 1.0
 
 @dataclass
 class SimulationRequest:
@@ -93,3 +96,5 @@ class SimulationRequest:
 
     # Prevent accidental infinite traversal
     hops: int = 0
+    attempts: int = 0
+    retries: int = 0

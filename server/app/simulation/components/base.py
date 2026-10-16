@@ -32,21 +32,24 @@ class SimulatedComponent:
 
         queued_at = self.env.now
 
-        with self.resource.request() as resource_request:
-            yield resource_request
-
-            self.total_wait_seconds += (
-                self.env.now - queued_at
-            )
-
-            processing_seconds = max(
-                self.config.latency_ms / 1000.0,
-                self.config.concurrency
-                / self.config.capacity_rps,
-            )
-
-            yield self.env.timeout(processing_seconds)
-
-            self.processed += 1
+        try:
+            with self.resource.request() as resource_request:
+                yield resource_request
+    
+                self.total_wait_seconds += (
+                    self.env.now - queued_at
+                )
+    
+                processing_seconds = max(
+                    self.config.latency_ms / 1000.0,
+                    self.config.concurrency
+                    / self.config.capacity_rps,
+                )
+    
+                yield self.env.timeout(processing_seconds)
+    
+                self.processed += 1
+        except simpy.Interrupt:
+            return False
 
         return True

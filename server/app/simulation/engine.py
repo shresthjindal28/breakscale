@@ -20,6 +20,10 @@ from app.simulation.components.database import DatabaseComponent
 from app.simulation.components.queue import MessageQueue
 from app.simulation.components.worker import BackgroundWorker
 from app.simulation.state import MessageStatus, QueueMessage
+from app.simulation.failures.injector import FailureEvent, FailureInjector
+from app.simulation.failures.circuit_breaker import CircuitBreaker
+from app.simulation.failures.recovery import RecoveryPolicy
+from app.simulation.algorithms.retries import backoff_with_jitter
 
 class SimulationEngine:
     def __init__(
@@ -31,6 +35,10 @@ class SimulationEngine:
         self.config = config or SimulationConfig()
         self.scheduler = SimulationScheduler()
         self.env = self.scheduler.env
+        self.failure_injector = FailureInjector(self.env)
+        self.circuit_breakers: dict[str, CircuitBreaker] = {}
+        self.component_failures: dict[str, int] = {}
+        self.component_timeouts: dict[str, int] = {}
         self.random = random.Random(self.config.seed)
 
         self.result = SimulationResult()
@@ -83,6 +91,33 @@ class SimulationEngine:
                 )
 
         for node in architecture.nodes:
+            if node.id not in self.components:
+                continue
+            data = node.data
+            if data.get("timeout_ms") is not None and float(data["timeout_ms"]) <= 0:
+                raise ValueError("timeout_ms must be positive")
+            if not 0 <= int(data.get("max_retries", 0)) <= 10:
+                raise ValueError("max_retries must be between 0 and 10")
+            if float(data.get("retry_base_delay", 0.5)) <= 0 or float(data.get("retry_max_delay", 30)) <= 0:
+                raise ValueError("Retry delays must be positive")
+            if not 0 <= float(data.get("retry_jitter", 0.2)) <= 1:
+                raise ValueError("jitter must be between 0 and 1")
+            if data.get("circuit_breaker_enabled", False):
+                policy = RecoveryPolicy(
+                    failure_threshold=int(data.get("failure_threshold", 5)),
+                    recovery_delay_seconds=float(data.get("recovery_timeout", 5.0)),
+                )
+                self.circuit_breakers[node.id] = CircuitBreaker(
+                    failure_threshold=policy.failure_threshold,
+                    recovery_timeout=policy.recovery_delay_seconds,
+                )
+            start, duration = data.get("failure_start_at"), data.get("failure_duration")
+            if (start is None) != (duration is None):
+                raise ValueError("failure_start_at and failure_duration must be supplied together")
+            if start is not None:
+                self.failure_injector.schedule(FailureEvent(node.id, float(start), float(duration)))
+
+        for node in architecture.nodes:
             if node.type == "queue":
                 self.queues[node.id] = MessageQueue(
                     self.env, node.id,
@@ -107,6 +142,63 @@ class SimulationEngine:
                 downstream=self._process_background_job,
             )
 
+    def _execute_component(self, node_id: str):
+        component = self.components[node_id]
+        breaker = self.circuit_breakers.get(node_id)
+        if breaker is not None and not breaker.allow_request(float(self.env.now)):
+            self.component_failures[node_id] = self.component_failures.get(node_id, 0) + 1
+            return False
+        if not self.failure_injector.is_available(node_id):
+            if breaker is not None:
+                breaker.record_failure(float(self.env.now))
+            self.component_failures[node_id] = self.component_failures.get(node_id, 0) + 1
+            return False
+        timeout_ms = self.node_data[node_id].get("timeout_ms")
+        process = self.env.process(component.process())
+        if timeout_ms is None:
+            success = yield process
+        else:
+            outcome = yield process | self.env.timeout(float(timeout_ms) / 1000)
+            if process in outcome:
+                success = outcome[process]
+            else:
+                success = False
+                self.component_timeouts[node_id] = self.component_timeouts.get(node_id, 0) + 1
+                if self.node_data[node_id].get("cancel_on_timeout", False) and process.is_alive:
+                    process.interrupt("timeout")
+                    yield process
+        if success:
+            if breaker is not None:
+                breaker.record_success()
+        else:
+            self.component_failures[node_id] = self.component_failures.get(node_id, 0) + 1
+            if breaker is not None:
+                breaker.record_failure(float(self.env.now))
+        return success
+
+    def _execute_with_retries(self, node_id: str, request: SimulationRequest | None = None):
+        data = self.node_data[node_id]
+        for attempt in range(int(data.get("max_retries", 0)) + 1):
+            self.result.component_attempts += 1
+            if request is not None:
+                request.attempts += 1
+            if attempt:
+                self.result.total_retries += 1
+                if request is not None:
+                    request.retries += 1
+            success = yield self.env.process(self._execute_component(node_id))
+            if success:
+                return True
+            if attempt == int(data.get("max_retries", 0)):
+                return False
+            delay = backoff_with_jitter(
+                attempt + 1, self.random,
+                base_delay=float(data.get("retry_base_delay", 0.5)),
+                max_delay=float(data.get("retry_max_delay", 30)),
+                jitter=float(data.get("retry_jitter", 0.2)),
+            )
+            yield self.env.timeout(delay)
+
     def _process_background_job(self, worker_id: str, message: QueueMessage):
         successors = list(self.graph.successors(worker_id))
         if not successors:
@@ -119,7 +211,7 @@ class SimulationEngine:
                 message.error = "Maximum job hops exceeded"
                 return False
             if current_node in self.components:
-                success = yield self.env.process(self.components[current_node].process())
+                success = yield self.env.process(self._execute_with_retries(current_node))
                 if not success:
                     message.error = f"Component rejected job: {current_node}"
                     return False
@@ -177,13 +269,13 @@ class SimulationEngine:
                 request.status = RequestStatus.PROCESSING
 
                 success = yield self.env.process(
-                    self.components[current_node].process()
+                    self._execute_with_retries(current_node, request)
                 )
 
                 if not success:
                     request.status = RequestStatus.FAILED
                     request.error = (
-                        f"Queue full at {current_node}"
+                        f"Component failed: {current_node}"
                     )
                     self.result.failed += 1
                     return
@@ -264,6 +356,7 @@ class SimulationEngine:
                 "Cycles are not supported by this engine version"
             )
 
+        self.failure_injector.start()
         for worker in self.workers.values():
             self.scheduler.start_process(worker.run())
 
@@ -315,6 +408,17 @@ class SimulationEngine:
                 "failed_attempts": worker.failed_attempts,
             }
 
+        for node_id in self.components:
+            breaker = self.circuit_breakers.get(node_id)
+            self.result.node_metrics[node_id].update({
+                "failures": self.component_failures.get(node_id, 0),
+                "timeouts": self.component_timeouts.get(node_id, 0),
+                "outages": self.failure_injector.outage_counts.get(node_id, 0),
+                "circuit_state": breaker.state.value if breaker else None,
+                "circuit_open_count": breaker.open_count if breaker else 0,
+                "circuit_rejections": breaker.rejected if breaker else 0,
+            })
+
         jobs = self.result.job_metrics
         jobs.completed = sum(
             message.status == MessageStatus.ACKNOWLEDGED for message in self.messages
@@ -328,4 +432,8 @@ class SimulationEngine:
             for message in self.messages
             if message.status == MessageStatus.ACKNOWLEDGED and message.completed_at is not None
         ]
+        original_attempts = self.result.component_attempts - self.result.total_retries
+        self.result.retry_amplification = (
+            self.result.component_attempts / original_attempts if original_attempts > 0 else 1.0
+        )
         return self.result

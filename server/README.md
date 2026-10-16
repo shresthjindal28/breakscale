@@ -89,8 +89,55 @@ final acknowledgment (including retries). HTTP completion still means queue
 acceptance. In-flight counts cover active attempts, excluding waiting messages
 and delayed retries. Message completion timestamps and errors are retained.
 Durable broker acknowledgments, worker crashes, and visibility timeouts are not
-modeled. Time-series queue depth, circuit breakers, timeouts, and failure injection
-remain future work.
+modeled. Time-series queue depth remains future work.
+
+### Outages, circuit breakers, and timeouts
+
+On service, database, cache, load-balancer, and other generic processing nodes,
+set `failure_start_at` and `failure_duration` together to schedule an outage in
+simulated seconds. Negative start times, nonpositive durations, and overlapping
+outages on the same node are rejected. Outages affect entry into a component;
+operations already processing continue.
+
+Enable a consecutive-failure circuit breaker with `circuit_breaker_enabled`.
+`failure_threshold` defaults to 5 and `recovery_timeout` to 5 simulated seconds.
+After opening, the breaker rejects calls until the recovery delay expires, then
+allows one half-open probe. A successful probe closes it; failure reopens it.
+This is a simplified breaker, without rolling-window failure rates or complete
+tracking of overlapping calls across circuit state changes.
+
+`timeout_ms` sets a positive caller timeout, including component queue wait time.
+By default, timed-out operations continue processing and occupying capacity;
+they do not later turn the failed caller into a success. Set `cancel_on_timeout`
+to `true` to interrupt the operation, release its resource, and remove any waiting
+resource request. Interrupted operations do not increment processed counts.
+Both HTTP requests and background jobs use
+the same outage, breaker, and timeout execution path. Queue brokers and worker
+processing itself are not covered by these component outage settings.
+
+Component metrics include `failures`, `timeouts`, `outages`, `circuit_state`,
+`circuit_open_count`, and `circuit_rejections`. Failures include rejected circuit
+calls, unavailable components, timeouts, and component queue rejections.
+
+### Component retries
+
+Set `max_retries` from 0 (default) through 10 on a processing node. This adds
+up to that many attempts after the initial attempt, including when a circuit
+rejects a call. Configure positive `retry_base_delay` (default 0.5 seconds),
+`retry_max_delay` (default 30 seconds), and `retry_jitter` from 0 to 1 (default
+0.2). Backoff is exponential, capped before multiplying by a seeded random
+factor between `1 - jitter` and `1 + jitter`. All waits use simulated time.
+
+Each HTTP request records `attempts` and `retries` across its visited components.
+`component_attempts` includes initial executions and retries for HTTP and
+background paths; it excludes client arrivals, worker-local processing, and
+queue publications. `total_retries` counts retries when they actually start,
+excluding delays still pending at the simulation cutoff. `retry_amplification`
+is component attempts divided by initial component attempts, or 1 for no
+attempts. HTTP failure counters increment only when the request exhausts its
+component retries. Background worker job retries remain separate and can amplify
+component retries further. Retrying operations with cancellation disabled may
+overlap backend work; retries do not imply rollback or idempotency.
 
 Load-balancer health checks and weights, variable service latency,
 advanced failures, live metrics/WebSockets, and frontend integration remain
