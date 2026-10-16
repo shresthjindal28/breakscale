@@ -139,6 +139,70 @@ component retries. Background worker job retries remain separate and can amplify
 component retries further. Retrying operations with cancellation disabled may
 overlap backend work; retries do not imply rollback or idempotency.
 
+### Metrics and WebSocket streaming
+
+The engine supports `start()`, `advance(until)`, and `finalize()` as well as
+`run()`. Start validates the graph before launching any processes and may only
+be called once. Advance uses absolute simulated timestamps; finalize requires
+the configured duration to be reached and aggregates final metrics once.
+`MetricsCollector.capture()` reads independent snapshots of live counters
+without finalizing the engine.
+
+Connect to `ws://localhost:8000/api/v1/simulations/stream` and send one JSON object
+containing `graph` (nodes and edges), `duration_seconds` (default 10, maximum 300),
+`sample_interval` (default 1, range 0.1–300 seconds), `seed` (default 42), and
+optional `max_requests` (default and maximum 10000).
+
+The server sends objects with `type` and `data` fields:
+
+- `simulation.started`: accepted duration and sample interval.
+- `simulation.metrics`: a snapshot at each sample timestamp, including the final
+  timestamp when the duration is not divisible by the interval.
+- `simulation.completed`: the finalized simulation result, then a normal close.
+- `simulation.error`: a validation/configuration error, then close code 1008.
+
+Snapshots include cumulative throughput, error rate, exact linearly interpolated
+latency percentiles (P50/P95/P99), queue depths, live component counters, background
+job metrics, and retry amplification. Throughput is completed HTTP requests divided
+by elapsed simulated seconds, not instantaneous throughput. Percentiles retain
+all latency samples; streaming quantile estimators remain future work.
+
+Each connection owns one run. Virtual time advances as fast as computation allows;
+events are not paced to wall-clock seconds. Execution yields between batches but
+each batch runs synchronously on the API event loop. This endpoint is intended for
+modest local workloads. Production process workers, persistence, multiple
+subscribers, windowed analytics, and utilization history remain future work.
+
+### Saved simulation runs
+
+Start the API with `uv run python main.py` and open `http://localhost:8000/docs`.
+Seed the development user (`uv run python -m scripts.seed`), then create a workspace
+with a valid architecture in `graph_data`.
+
+- `POST /api/v1/simulations`: send `workspace_id`, `duration_seconds` (default 10,
+  positive and at most 300), and `seed` (default 42). Returns the completed run
+  with HTTP 201 after the simulation finishes.
+- `GET /api/v1/simulations?workspace_id=UUID`: list workspace runs, newest first.
+- `GET /api/v1/simulations/{id}`: retrieve run status and metadata.
+- `GET /api/v1/simulations/{id}/results`: retrieve persisted summary and node metrics.
+
+All simulation REST endpoints use the seeded development identity, check workspace
+ownership, and return 403 when `DEBUG=false`. Use real authentication before public
+deployment. These endpoints persist a graph snapshot and seed so later workspace
+edits do not change the saved run. The engine executes through `asyncio.to_thread`
+to keep synchronous work off the API event loop; this is not a production job queue.
+
+The summary contains HTTP counters, throughput, error rate, latency percentiles,
+background job counters/latency summaries, and retry metrics. Full latency samples
+and time-series snapshots are not persisted. A completed run means its observation
+window ended; jobs may still be queued or in flight.
+
+Engine errors persist a failed run plus an error reason in the result's `summary`.
+The POST error response includes `detail.simulation_id` for subsequent retrieval.
+Cancellation, process crashes, or storage failures can still leave a running record;
+reconciliation and durable workers remain future work. The existing PostgreSQL
+models support this implementation without an additional migration.
+
 Load-balancer health checks and weights, variable service latency,
 advanced failures, live metrics/WebSockets, and frontend integration remain
 future work. Cycles are rejected; requests also have a defensive 100-hop limit.

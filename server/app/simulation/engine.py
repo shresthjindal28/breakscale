@@ -1,4 +1,5 @@
 import random
+import math
 
 import networkx as nx
 
@@ -341,7 +342,11 @@ class SimulationEngine:
 
             yield self.env.timeout(interval)
 
-    def run(self) -> SimulationResult:
+    def start(self):
+        if getattr(self, "_started", False):
+            raise RuntimeError("Simulation already started")
+        if not math.isfinite(self.config.duration_seconds) or self.config.duration_seconds <= 0:
+            raise ValueError("Simulation duration must be positive and finite")
         validation = GraphValidator(
             self.architecture
         ).validate()
@@ -356,6 +361,7 @@ class SimulationEngine:
                 "Cycles are not supported by this engine version"
             )
 
+        self._started = True
         self.failure_injector.start()
         for worker in self.workers.values():
             self.scheduler.start_process(worker.run())
@@ -368,12 +374,19 @@ class SimulationEngine:
                     self._generate_traffic(node.id, rps)
                 )
 
-        self.scheduler.run(
-            until=self.config.duration_seconds
-        )
+    def advance(self, until: float):
+        if not getattr(self, "_started", False):
+            raise RuntimeError("Start simulation first")
+        if not math.isfinite(until) or until <= self.env.now:
+            raise ValueError("Target time must be finite and greater than current time")
+        if until > self.config.duration_seconds:
+            raise ValueError("Cannot advance beyond simulation duration")
+        self.env.run(until=until)
 
+    def collect_node_metrics(self) -> dict:
+        metrics = {}
         for node_id, component in self.components.items():
-            self.result.node_metrics[node_id] = {
+            metrics[node_id] = {
                 "processed": component.processed,
                 "rejected": component.rejected,
                 "queued": len(component.resource.queue),
@@ -386,14 +399,14 @@ class SimulationEngine:
             }
 
         for node_id, cache in self.caches.items():
-            self.result.node_metrics[node_id].update({
+            metrics[node_id].update({
                 "cache_hits": cache.hits,
                 "cache_misses": cache.misses,
                 "cache_hit_rate": cache.hit_rate,
             })
 
         for queue_id, queue in self.queues.items():
-            self.result.node_metrics[queue_id] = {
+            metrics[queue_id] = {
                 "published": queue.published,
                 "consumed": queue.consumed,
                 "acknowledged": queue.acknowledged,
@@ -403,14 +416,14 @@ class SimulationEngine:
                 "in_flight": queue.in_flight,
             }
         for worker_id, worker in self.workers.items():
-            self.result.node_metrics[worker_id] = {
+            metrics[worker_id] = {
                 "processed": worker.processed,
                 "failed_attempts": worker.failed_attempts,
             }
 
         for node_id in self.components:
             breaker = self.circuit_breakers.get(node_id)
-            self.result.node_metrics[node_id].update({
+            metrics[node_id].update({
                 "failures": self.component_failures.get(node_id, 0),
                 "timeouts": self.component_timeouts.get(node_id, 0),
                 "outages": self.failure_injector.outage_counts.get(node_id, 0),
@@ -419,7 +432,12 @@ class SimulationEngine:
                 "circuit_rejections": breaker.rejected if breaker else 0,
             })
 
-        jobs = self.result.job_metrics
+        return metrics
+
+    def collect_job_metrics(self):
+        from app.simulation.state import BackgroundJobMetrics
+
+        jobs = BackgroundJobMetrics(submitted=self.result.job_metrics.submitted)
         jobs.completed = sum(
             message.status == MessageStatus.ACKNOWLEDGED for message in self.messages
         )
@@ -432,8 +450,23 @@ class SimulationEngine:
             for message in self.messages
             if message.status == MessageStatus.ACKNOWLEDGED and message.completed_at is not None
         ]
+        return jobs
+
+    def finalize(self) -> SimulationResult:
+        if not getattr(self, "_started", False) or self.env.now < self.config.duration_seconds:
+            raise RuntimeError("Simulation is not finished")
+        if getattr(self, "_finalized", False):
+            return self.result
+        self.result.node_metrics = self.collect_node_metrics()
+        self.result.job_metrics = self.collect_job_metrics()
         original_attempts = self.result.component_attempts - self.result.total_retries
         self.result.retry_amplification = (
             self.result.component_attempts / original_attempts if original_attempts > 0 else 1.0
         )
+        self._finalized = True
         return self.result
+
+    def run(self) -> SimulationResult:
+        self.start()
+        self.advance(self.config.duration_seconds)
+        return self.finalize()
