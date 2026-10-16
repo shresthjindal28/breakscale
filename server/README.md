@@ -1,5 +1,31 @@
 # Breakscale server
 
+## Running the authenticated application
+
+Configure `.env` from `.env.example`, set real PostgreSQL/Redis URLs, and generate
+a private JWT secret. Redis URLs requiring TLS must use `rediss://`. Keep
+`DEBUG=false`; no API route uses the old seeded development identity.
+
+```sh
+uv sync
+uv run alembic upgrade head
+uv run python main.py
+# A separate terminal:
+uv run python -m scripts.worker
+# Frontend terminal, in client/:
+npm run dev
+```
+
+Register at `http://localhost:3000/register`, then open the playground. Save the
+workspace to PostgreSQL before Save & Run. That action saves the current canvas
+again before submitting a job. History polls active runs; completed runs can be
+compared, replayed, or deleted. The existing Save/Load buttons still use browser
+IndexedDB, separately from server workspaces.
+
+The worker launcher preserves TLS when spawning RQ child processes and uses the
+JSON serializer. Use this launcher rather than a bare `rq worker` command.
+
+
 ## Database setup
 
 1. Copy `.env.example` to `.env` if `.env` does not exist.
@@ -148,8 +174,9 @@ the configured duration to be reached and aggregates final metrics once.
 `MetricsCollector.capture()` reads independent snapshots of live counters
 without finalizing the engine.
 
-Connect to `ws://localhost:8000/api/v1/simulations/stream` and send one JSON object
-containing `graph` (nodes and edges), `duration_seconds` (default 10, maximum 300),
+Connect to `ws://localhost:8000/api/v1/simulations/stream`. First send
+`{ "ticket": "..." }` from authenticated `POST /api/v1/auth/ws-ticket`.
+After `auth.authenticated`, send a second object containing `graph` (nodes and edges), `duration_seconds` (default 10, maximum 300),
 `sample_interval` (default 1, range 0.1–300 seconds), `seed` (default 42), and
 optional `max_requests` (default and maximum 10000).
 
@@ -170,40 +197,46 @@ summaries still use whole-run average throughput. Percentiles retain
 all latency samples; streaming quantile estimators remain future work.
 
 Each connection owns one run. Virtual time advances as fast as computation allows;
-events are not paced to wall-clock seconds. Execution yields between batches but
-each batch runs synchronously on the API event loop. This endpoint is intended for
-modest local workloads. Production process workers, persistence, multiple
+events are not paced to wall-clock seconds. Live simulations execute in an RQ child process; the API forwards ordered Redis
+stream events. Disconnect sets a cooperative cancellation flag. Multiple
 subscribers, windowed analytics, and utilization history remain future work.
 
 ### Saved simulation runs
 
 Start the API with `uv run python main.py` and open `http://localhost:8000/docs`.
-Seed the development user (`uv run python -m scripts.seed`), then create a workspace
-with a valid architecture in `graph_data`.
+Register/login, then authorize Swagger with the access token and create a workspace
+with a valid architecture in `graph_data`. Cookie endpoints also require an allowed
+`Origin` header; browser forms supply it automatically.
 
 - `POST /api/v1/simulations`: send `workspace_id`, `duration_seconds` (default 10,
-  positive and at most 300), and `seed` (default 42). Returns the completed run
-  with HTTP 201 after the simulation finishes.
+  positive and at most 300), and `seed` (default 42). Returns a pending run
+  with HTTP 202 after enqueueing; poll its status until it finishes.
 - `GET /api/v1/simulations?workspace_id=UUID`: list workspace runs, newest first.
 - `GET /api/v1/simulations/{id}`: retrieve run status and metadata.
 - `GET /api/v1/simulations/{id}/results`: retrieve persisted summary and node metrics.
 
-All simulation REST endpoints use the seeded development identity, check workspace
-ownership, and return 403 when `DEBUG=false`. Use real authentication before public
-deployment. These endpoints persist a graph snapshot and seed so later workspace
-edits do not change the saved run. The engine executes through `asyncio.to_thread`
-to keep synchronous work off the API event loop; this is not a production job queue.
+All resource endpoints require Bearer authentication and verify workspace ownership.
+Snapshots preserve the graph and seed used for each run. The worker creates a
+fresh SQLAlchemy engine/session lifecycle inside its own process. Never pass API
+sessions to the worker.
 
 The summary contains HTTP counters, throughput, error rate, latency percentiles,
 background job counters/latency summaries, and retry metrics. Full latency samples
 and time-series snapshots are not persisted. A completed run means its observation
 window ended; jobs may still be queued or in flight.
 
-Engine errors persist a failed run plus an error reason in the result's `summary`.
-The POST error response includes `detail.simulation_id` for subsequent retrieval.
-Cancellation, process crashes, or storage failures can still leave a running record;
-reconciliation and durable workers remain future work. The existing PostgreSQL
-models support this implementation without an additional migration.
+Engine errors persist a failed run plus an error reason in the result summary.
+Enqueue failures persist a failed record and return HTTP 503 with its ID.
+`POST /simulations/{id}/cancel` cancels pending work or requests cooperative
+cancellation between 0.25-second simulation batches. A final database row lock
+prevents completion from overwriting an earlier cancellation request. Cancelled
+runs can include partial metrics and trace. Active runs cannot be deleted.
+
+Run `uv run python -m scripts.reconcile_simulations` periodically to identify
+abandoned runs older than 16 minutes. Missing pending jobs are re-enqueued;
+terminal/lost jobs are marked failed (or cancelled) with an error. Monitor RQ and
+run this reconciler as a scheduled task; hard crashes cannot persist their own
+errors. Redis enqueue and PostgreSQL are not a transactional outbox.
 
 ### Playground charts and node metrics
 
@@ -222,11 +255,99 @@ requests. Message queue depth excludes generic service/database waiting queues,
 which are shown separately in the inspector.
 
 Load-balancer health checks and weights, variable service latency,
-advanced failures, live metrics/WebSockets, and frontend integration remain
-future work. Cycles are rejected; requests also have a defensive 100-hop limit.
+and richer workload models remain future work. Cycles are rejected; requests also have a defensive 100-hop limit.
 
 Run the unit suite with:
 
 ```sh
 uv run pytest tests/unit -v
 ```
+
+
+## Authentication and deployment
+
+- `POST /auth/register`, `/auth/login`, `/auth/refresh`, `/auth/logout` and
+  `GET /users/me` implement Argon2 credentials, 15-minute access JWTs, opaque
+  refresh tokens stored only as SHA-256 hashes, and rotated refresh sessions.
+  Reuse revokes the whole family. Logout revokes that family; access JWTs expire
+  naturally rather than being individually blacklisted.
+- Refresh cookies are HttpOnly with the auth route path, configurable Secure and
+  SameSite flags. All cookie endpoints require an exact trusted Origin. For local
+  HTTP use `COOKIE_SECURE=false`; HTTPS deployment must use true. SameSite=None
+  requires Secure and remains protected by Origin checks. Prefer same-site custom
+  domains for frontend/API; configure `ALLOWED_ORIGINS` for the actual frontend.
+- Access tokens stay in browser memory. A single-flight refresh restores sessions;
+  server resource ownership checks enforce authorization independently of UI gates.
+- WebSocket tickets expire after 30 seconds and are atomically consumed once;
+  access tokens never appear in WebSocket URLs. WebSocket Origin is checked before
+  accepting commands. Limits bound request bodies, graph size, duration, request
+  count, worker attempts, auth rate, and per-user concurrent jobs/streams.
+- RQ jobs use a 600-second timeout, finite queue TTL, Redis leases, and fresh worker
+  database sessions. Monitor queue delay, memory, quotas, retries, and recovery.
+  Worker progress is published in Redis; saved history polls the owned REST API.
+
+### Replay and historical comparisons
+
+Each saved result retains up to 20000 synchronous HTTP trace events in nullable
+`trace_data`. `/simulations/{id}/trace` checks ownership; old results return an
+empty trace. Overflow is explicit (`truncated`, `dropped_events`). Replay uses a
+separate read-only canvas from the saved graph snapshot, with play/pause, seek,
+restart, and 0.5–4× speed. Markers interpolate between node entries and may include
+service time; zero-duration transitions are skipped. Up to 200 markers are shown.
+Background jobs and chart playback are not traced/synchronized yet. Comparison
+shows missing historical metrics as N/A and preserves original architectures.
+
+### Containers
+
+At the project root, copy `compose.env.example` to a private local environment
+file and set the database password and `COMPOSE_DATABASE_URL`. For the included
+PostgreSQL service use hostname `postgres`, not localhost; URL-encode credentials.
+Use the Neon URL instead if desired (the local database service is then optional).
+The server `.env` supplies JWT/cookie/origin configuration; Compose overrides the
+Redis URL with its internal Redis service. No secrets are copied into the image.
+
+```sh
+docker compose --env-file /path/to/private-compose.env up --build -d
+# Controlled deployment step, once per deployment:
+docker compose --env-file /path/to/private-compose.env run --rm api uv run --no-sync alembic upgrade head
+docker compose --env-file /path/to/private-compose.env ps
+docker compose --env-file /path/to/private-compose.env logs -f api worker
+```
+
+Use HTTPS/WSS, allowlisted origins, secure cookies, managed backups, restricted
+Redis/database access, worker resource limits, monitoring and a scheduled
+reconciler before deployment. Migrations must not run independently per replica.
+This repository has not been deployed to a hosting provider.
+
+### Quality and performance checks
+
+```sh
+uv run ruff check .
+uv run mypy app
+uv run pytest -v
+# client/:
+npx tsc --noEmit
+npm run lint
+npm test
+npm run build
+```
+
+`uv run locust -f tests/performance/locustfile.py` starts a health smoke workload.
+Set LOCUST_EMAIL, LOCUST_PASSWORD and LOCUST_WORKSPACE_ID for authenticated history
+traffic against disposable resources. Measure representative simulation job CPU,
+memory and queue/stream latency under concurrency before capacity planning;
+a passing health test alone does not establish production capacity.
+
+`uv run python -m scripts.benchmark` exercises linear, queue/worker, and
+outage/retry workloads in two spawned engine processes, reporting wall time,
+process peak memory, request counters and trace truncation. It excludes network,
+API and Redis queue overhead. The opt-in full lifecycle test requires a running
+worker and disposable test resources:
+
+```sh
+BREAKSCALE_INTEGRATION=1 uv run pytest tests/integration/test_full_lifecycle.py -v -s
+```
+
+Node connections use the green output below a node and the blue input above its
+target. Drag between ports or click them in turn. The editor uses a dedicated
+React Flow node type so default node styling cannot cover the custom handles.

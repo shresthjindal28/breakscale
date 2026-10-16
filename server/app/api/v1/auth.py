@@ -25,7 +25,7 @@ def cookie_path():
 def set_refresh_cookie(response: Response, token: str):
     settings = get_settings()
     response.set_cookie(COOKIE_NAME, token, max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS*86400,
-        httponly=True, secure=settings.COOKIE_SECURE, samesite="lax", path=cookie_path())
+        httponly=True, secure=settings.COOKIE_SECURE, samesite=settings.COOKIE_SAMESITE, path=cookie_path())
 
 @router.post("/register", response_model=UserResponse, status_code=201, dependencies=[Depends(trusted_origin)])
 async def register(data: RegisterRequest, request: Request, db: AsyncSession = Depends(get_db), redis: Redis = Depends(get_redis)):
@@ -57,7 +57,7 @@ async def logout(request: Request, db: AsyncSession = Depends(get_db)):
     if raw:
         await revoke_refresh_token(db, raw)
     response = Response(status_code=204)
-    response.delete_cookie(COOKIE_NAME, path=cookie_path(), secure=get_settings().COOKIE_SECURE, httponly=True, samesite="lax")
+    response.delete_cookie(COOKIE_NAME, path=cookie_path(), secure=get_settings().COOKIE_SECURE, httponly=True, samesite=get_settings().COOKIE_SAMESITE)
     return response
 
 @router.post("/ws-ticket")

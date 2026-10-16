@@ -18,14 +18,14 @@ import { PlaybackControls } from "@/components/simulation/playback-controls";
 import { RequestAnimationOverlay } from "@/components/simulation/request-animation-overlay";
 function ReplayNode({ data }: NodeProps) {
   return (
-    <div className="min-w-40 rounded-lg border bg-card px-4 py-3 text-sm shadow-sm">
+    <div className="relative min-w-40 rounded-lg border bg-card px-4 py-3 text-sm shadow-sm">
       <Handle type="target" position={Position.Top} isConnectable={false} />
       {typeof data.label === "string" ? data.label : "Component"}
       <Handle type="source" position={Position.Bottom} isConnectable={false} />
     </div>
   );
 }
-const nodeTypes = { default: ReplayNode };
+const nodeTypes = { replay: ReplayNode };
 export function SimulationReplay({
   simulationId,
   onClose,
@@ -119,6 +119,7 @@ export function SimulationReplay({
               <ReactFlow
                 nodes={graph.nodes.map((node) => ({
                   id: node.id,
+                  type: "replay",
                   position: node.position ?? { x: 0, y: 0 },
                   data: {
                     ...node.data,

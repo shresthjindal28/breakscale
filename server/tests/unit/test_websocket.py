@@ -134,3 +134,13 @@ def test_websocket_untrusted_origin_rejected():
         with pytest.raises(WebSocketDisconnect):
             with client.websocket_connect("/api/v1/simulations/stream",headers={"Origin":"https://evil.example"}):
                 pass
+
+
+def test_websocket_missing_ticket_rejected():
+    from starlette.websockets import WebSocketDisconnect
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/v1/simulations/stream",headers={"Origin":"http://localhost:3000"}) as ws:
+            ws.send_json({"graph": {}})
+            with pytest.raises(WebSocketDisconnect) as error:
+                ws.receive_json()
+            assert error.value.code == 1008

@@ -1,8 +1,9 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import ArgumentError
@@ -26,10 +27,17 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=15, gt=0, le=60)
     REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=7, gt=0, le=30)
     COOKIE_SECURE: bool = True
+    COOKIE_SAMESITE: Literal["lax", "strict", "none"] = "lax"
     ALLOWED_ORIGINS: list[str] = Field(default_factory=list)
     MAX_ACTIVE_SIMULATIONS: int = Field(default=2, ge=1, le=10)
     MAX_REQUESTS: int = Field(default=10_000, ge=1, le=100_000)
     MAX_WS_MESSAGE_BYTES: int = Field(default=262_144, ge=1024)
+
+    @model_validator(mode="after")
+    def validate_cookie_policy(self):
+        if self.COOKIE_SAMESITE == "none" and not self.COOKIE_SECURE:
+            raise ValueError("SameSite=None requires secure refresh cookies")
+        return self
 
     @property
     def redis_url(self) -> str:

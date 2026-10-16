@@ -96,6 +96,7 @@ async def stream_simulation(websocket: WebSocket, redis: Redis = Depends(get_red
         for task in (reader,disconnect):
             if task is not None and not task.done():
                 task.cancel()
+        await asyncio.gather(*(task for task in (reader,disconnect) if task is not None), return_exceptions=True)
         if run_id is not None:
             try:
                 await redis.set(f"breakscale:cancel:{run_id}","1",ex=900)

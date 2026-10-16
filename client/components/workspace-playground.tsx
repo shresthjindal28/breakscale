@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   ReactFlow,
   Background,
@@ -31,10 +31,14 @@ import { SavedSimulations } from "@/components/simulation/saved-simulations";
 import { SimulationCharts } from "@/components/simulation/simulation-charts";
 import { NodeMetricsPanel } from "@/components/simulation/node-metrics-panel";
 import { SimulationNode } from "@/components/simulation/simulation-node";
-const nodeTypes = { default: SimulationNode };
+const nodeTypes = { simulation: SimulationNode };
 
 export function WorkspacePlayground() {
   const store = useWorkspaceStore();
+  const editorNodes = useMemo(
+    () => store.nodes.map((node) => ({ ...node, type: "simulation" })),
+    [store.nodes],
+  );
   const [status, setStatus] = useState("");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const selectedNode = store.nodes.find((node) => node.id === selectedNodeId);
@@ -139,7 +143,10 @@ export function WorkspacePlayground() {
                   nodeTypes={nodeTypes}
                   onNodeClick={(_, node) => setSelectedNodeId(node.id)}
                   onPaneClick={() => setSelectedNodeId(null)}
-                  nodes={store.nodes}
+                  nodes={editorNodes}
+                  nodesConnectable
+                  connectOnClick
+                  connectionRadius={28}
                   edges={store.edges}
                   onNodesChange={store.onNodesChange}
                   onEdgesChange={store.onEdgesChange}
@@ -152,6 +159,10 @@ export function WorkspacePlayground() {
                 </ReactFlow>
               </ReactFlowProvider>
             </div>
+            <p className="text-xs text-muted-foreground">
+              Connect the green output dot below a node to the blue input dot
+              above another. Drag between dots, or click each dot in turn.
+            </p>
             <SimulationMetrics />
             <SimulationCharts />
             <SavedSimulations />
