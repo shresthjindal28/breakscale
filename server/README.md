@@ -57,9 +57,42 @@ use capacity, concurrency, and queue limits. The current processing time remains
 semantics still need refinement to keep database pool size and throughput
 consistent. Database locks and read/write query types are not modeled yet.
 
-Queues and workers currently use generic component processing. Producer/consumer
-processing, backlog, acknowledgments, retries, and dead-letter queues are the next
-stage. Load-balancer health checks and weights, variable service latency,
+Queues use a FIFO message buffer with `queue_capacity` (default 1000). Workers
+consume from their first upstream queue and process one attempt at a time.
+Configure `processing_ms` (default 100), `failure_rate` (default 0), and
+`max_attempts` (default 3) on each worker. Multiple workers can share a queue.
+Workers require an incoming queue connection.
+
+HTTP requests complete when publishing succeeds and fail when the queue is full.
+Failed attempts retry after simulated exponential backoff (0.5, 1, 2, ... seconds,
+capped at 30), without blocking consumption of other messages. Exhausted attempts
+and retries rejected by a full queue are retained in the queue's `dead_letters`
+list. Successful processing acknowledges the message.
+
+Queue metrics include `published`, `consumed`, `acknowledged`, `rejected`,
+`dead_lettered`, `depth`, and `in_flight`; worker metrics include `processed` and
+`failed_attempts`. Published and consumed count retry operations too; depth counts
+buffered messages, excluding active jobs and delayed retries. Metrics are snapshots
+at the simulation cutoff; pending jobs and retries are not drained afterward.
+
+Workers traverse downstream components, including database nodes, before
+acknowledging a job. Downstream rejections retry the job from the worker, up to
+its attempt limit. Nested queues and downstream worker/client nodes are rejected
+explicitly. Background load balancers use their configured algorithm; caches on
+background paths currently use generic processing without read-cache shortcuts.
+Retries replay the whole job; transactional rollback and idempotency are not
+modeled.
+
+`SimulationResult.job_metrics` reports submitted jobs, completed jobs, dead-lettered
+jobs, failed attempts, and successful job latencies from queue acceptance through
+final acknowledgment (including retries). HTTP completion still means queue
+acceptance. In-flight counts cover active attempts, excluding waiting messages
+and delayed retries. Message completion timestamps and errors are retained.
+Durable broker acknowledgments, worker crashes, and visibility timeouts are not
+modeled. Time-series queue depth, circuit breakers, timeouts, and failure injection
+remain future work.
+
+Load-balancer health checks and weights, variable service latency,
 advanced failures, live metrics/WebSockets, and frontend integration remain
 future work. Cycles are rejected; requests also have a defensive 100-hop limit.
 

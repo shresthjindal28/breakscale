@@ -137,3 +137,54 @@ def test_engine_limits_request_hops():
     assert request.status == RequestStatus.FAILED
     assert request.error == "Maximum request hops exceeded"
     assert engine.result.failed == 1
+
+
+def queue_engine(with_worker=True, capacity=1000):
+    nodes = [
+        {"id": "client", "type": "client", "data": {"rps": 10}},
+        {"id": "jobs", "type": "queue", "data": {"queue_capacity": capacity}},
+    ]
+    edges = [{"id": "entry", "source": "client", "target": "jobs"}]
+    if with_worker:
+        nodes += [
+            {"id": "worker", "type": "worker", "data": {"processing_ms": 200}},
+            {"id": "db", "type": "database"},
+        ]
+        edges += [
+            {"id": "consume", "source": "jobs", "target": "worker"},
+            {"id": "write", "source": "worker", "target": "db"},
+        ]
+    return SimulationEngine(
+        ArchitectureGraph.model_validate({"nodes": nodes, "edges": edges}),
+        SimulationConfig(duration_seconds=1, max_requests=3),
+    )
+
+
+def test_queue_acceptance_completes_http_and_worker_acknowledges():
+    engine = queue_engine()
+    result = engine.run()
+    assert "jobs" not in engine.components
+    assert "worker" not in engine.components
+    assert result.completed == 3
+    assert result.latencies_ms == [0, 0, 0]
+    assert result.node_metrics["jobs"]["acknowledged"] == 3
+    assert result.node_metrics["worker"]["processed"] == 3
+    assert result.node_metrics["db"]["processed"] == 3
+    assert result.job_metrics.submitted == result.job_metrics.completed == 3
+    assert result.node_metrics["jobs"]["in_flight"] == 0
+
+
+def test_full_queue_rejects_http_requests():
+    engine = queue_engine(with_worker=False, capacity=1)
+    result = engine.run()
+    assert result.completed == 1
+    assert result.failed == 2
+    assert result.node_metrics["jobs"]["depth"] == 1
+    assert result.node_metrics["jobs"]["rejected"] == 2
+
+
+def test_worker_requires_upstream_queue():
+    import pytest
+
+    with pytest.raises(ValueError, match="must connect to a queue"):
+        specialized_engine("worker", {})

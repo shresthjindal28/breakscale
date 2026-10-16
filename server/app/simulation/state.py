@@ -10,6 +10,34 @@ class RequestStatus(str, Enum):
     FAILED = "failed"
 
 
+class MessageStatus(str, Enum):
+    QUEUED = "queued"
+    PROCESSING = "processing"
+    ACKNOWLEDGED = "acknowledged"
+    DEAD_LETTERED = "dead_lettered"
+
+
+@dataclass
+class QueueMessage:
+    id: int
+    request_id: int
+    created_at: float
+    attempts: int = 0
+    status: MessageStatus = MessageStatus.QUEUED
+    payload: dict = field(default_factory=dict)
+    completed_at: float | None = None
+    error: str | None = None
+
+
+@dataclass
+class BackgroundJobMetrics:
+    submitted: int = 0
+    completed: int = 0
+    dead_lettered: int = 0
+    failed_attempts: int = 0
+    latencies_ms: list[float] = field(default_factory=list)
+
+
 # @dataclass
 # class SimulationRequest:
 #     id: int
@@ -48,6 +76,7 @@ class SimulationResult:
     node_metrics: dict[str, dict[str, Any]] = field(
         default_factory=dict
     )
+    job_metrics: BackgroundJobMetrics = field(default_factory=BackgroundJobMetrics)
 
 @dataclass
 class SimulationRequest:
